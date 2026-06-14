@@ -16,7 +16,6 @@ _alloc_lock = asyncio.Lock()
 
 # ── Helper: track all bot message IDs for later deletion ─────────────────────
 def _track(context, msg):
-    """Save a sent message's id so we can delete it later."""
     if "msg_ids" not in context.user_data:
         context.user_data["msg_ids"] = []
     context.user_data["msg_ids"].append((msg.chat_id, msg.message_id))
@@ -24,7 +23,6 @@ def _track(context, msg):
 
 
 async def _delete_history(context, keep_message_ids: list = None):
-    """Delete all tracked bot messages except those in keep_message_ids."""
     keep = set(keep_message_ids or [])
     for chat_id, msg_id in context.user_data.get("msg_ids", []):
         if msg_id in keep:
@@ -32,8 +30,7 @@ async def _delete_history(context, keep_message_ids: list = None):
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
         except BadRequest:
-            pass  # Already deleted or too old
-    # Also try to delete user messages
+            pass
     for chat_id, msg_id in context.user_data.get("user_msg_ids", []):
         if msg_id in keep:
             continue
@@ -44,7 +41,6 @@ async def _delete_history(context, keep_message_ids: list = None):
 
 
 def _track_user(context, update):
-    """Track user's own message for deletion."""
     if "user_msg_ids" not in context.user_data:
         context.user_data["user_msg_ids"] = []
     context.user_data["user_msg_ids"].append(
@@ -212,8 +208,6 @@ async def get_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     range_id   = context.user_data["range_id"]
     range_name = context.user_data["range_name"]
 
-    # ── Queue message ──────────────────────────────────────────────────────────
-    # If another allocation is in progress, wait for it to finish
     if _alloc_lock.locked():
         wait_msg = await update.message.reply_text(
             "⏳ Another request is in progress. Please wait..."
@@ -228,9 +222,9 @@ async def get_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
         if not result["success"]:
             wait_msg2 = await update.message.reply_text(
-                "⏳ This range has no numbers in your account right now.\n"
-                "Checking if more numbers can be pulled from the pool...\n"
-                "Please wait about 1 minute."
+                "⏳ এই রেঞ্জে কোনো নম্বর আমাদের কাছে নেই।\n"
+                "আপনার জন্য নম্বর রিকোয়েস্ট পাঠানো হয়েছে...\n"
+                "১ মিনিটের মধ্যে আমি নম্বর পাঠিয়ে দিচ্ছি।"
             )
             _track(context, wait_msg2)
 
@@ -238,8 +232,8 @@ async def get_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
             if not requested:
                 fail_msg = await update.message.reply_text(
-                    "❌ The provider currently has no numbers available for this range.\n"
-                    "Please try a different range. Use /start to begin."
+                    "❌ দুঃখিত, প্রোভাইডারের কাছে বর্তমানে এই রেঞ্জে কোনো নম্বর নেই।\n"
+                    "অনুগ্রহ করে ভিন্ন একটি রেঞ্জ চেষ্টা করুন। /start দাও।"
                 )
                 _track(context, fail_msg)
                 await _delete_history(context, keep_message_ids=[fail_msg.message_id])
@@ -251,16 +245,16 @@ async def get_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
             if not result["success"]:
                 fail_msg = await update.message.reply_text(
-                    "❌ Still no numbers available in this range.\n"
-                    "Please try a different range. Use /start to begin."
+                    "❌ এই রেঞ্জে এখনো নম্বর নেই।\n"
+                    "ভিন্ন রেঞ্জ চেষ্টা করুন। /start দাও।"
                 )
                 _track(context, fail_msg)
                 await _delete_history(context, keep_message_ids=[fail_msg.message_id])
                 context.user_data.clear()
                 return ConversationHandler.END
 
-        cid     = result["client_id"] or client_id
-        numbers = download_numbers(result["ealid"]) if result["ealid"] else []
+        cid      = result["client_id"] or client_id
+        numbers  = download_numbers(result["ealid"]) if result["ealid"] else []
         provided = len(numbers)
 
         # ── Alert message ──────────────────────────────────────────────────────
@@ -272,7 +266,7 @@ async def get_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             f"📱 *Numbers:*\n"
         )
 
-        keep_ids = []  # These messages will NOT be deleted
+        keep_ids = []
 
         if numbers:
             full = alert + "\n".join(numbers)
@@ -313,7 +307,14 @@ async def get_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             os.unlink(tmp)
             keep_ids.append(file_msg.message_id)
 
-        # ── Delete all previous chat history except numbers + file ─────────────
+        # ── Done message (stays, not deleted) ─────────────────────────────────
+        done_msg = await update.message.reply_text(
+            "✅ Numbers পাঠানো হয়েছে!\n\n"
+            "আরও numbers নিতে /start দাও 👇"
+        )
+        keep_ids.append(done_msg.message_id)
+
+        # ── Delete all previous chat history except numbers + file + done ──────
         await _delete_history(context, keep_message_ids=keep_ids)
 
         context.user_data.clear()
